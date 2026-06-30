@@ -1,0 +1,125 @@
+# -------------------------------
+# Simulação - fix brownian/sphere com potencial de Alan
+# com propulsão ativa na direção do dipolo
+# -------------------------------
+
+units lj
+atom_style hybrid sphere dipole
+dimension 2
+boundary p p p
+
+# -------------------------------
+# Listas de densidade e velocidades
+# -------------------------------
+variable rho_list index 0.35 0.4 0.45 0.5 0.55
+# -------------------------------
+# Loop externo em densidade (rho)
+# -------------------------------
+label loop_rho
+variable rho equal ${rho_list}
+variable N equal 10000
+variable A equal ${N}/${rho}
+variable L equal sqrt(${A})
+variable T equal 0.2
+variable seed equal 12345
+
+
+variable v_iter delete
+variable v_iter index 0.0 0.5 1.0 2.0 2.5 5.0 7.5 10.0        
+
+# -------------------------------
+# Loop interno em velocidade (v)
+# -------------------------------
+label loop_v
+variable v equal ${v_iter}
+
+print "Iniciando simulação para rho = ${rho}, v = ${v}, L = ${L}"
+
+# -------------------------------
+# Reiniciar sistema
+# -------------------------------
+clear
+units lj
+atom_style hybrid sphere dipole
+dimension 2
+boundary p p p
+
+# -------------------------------
+# Criar caixa e partículas
+# -------------------------------
+region box block 0 ${L} 0 ${L} -0.5 0.5
+create_box 1 box
+create_atoms 1 random ${N} 341341 NULL overlap 1.0 maxtry 10000
+set type 1 diameter 1.0
+set type 1 density 1.0
+set type 1 dipole 1.0 0.0 0.0
+
+set group all dipole/random ${seed} 1.0
+
+# -------------------------------
+# Interações
+# -------------------------------
+pair_style table linear 4999
+pair_coeff 1 1 force_field.in CS_AA 3.5
+
+# avoid ovelap 
+min_style cg
+minimize 0.0 1.0e-8 1000 100000
+
+# -------------------------------
+# Dinâmica Browniana + matéria ativa
+# -------------------------------
+# gamma_r pequeno - rotação mais rápida (dipolos mudam orientação)
+fix active all propel/self dipole ${v}
+fix brown all brownian/sphere ${T} ${seed} gamma_t 15.0 gamma_r 0.1 rng gaussian
+fix planar all enforce2d
+
+# -------------------------------
+# Equilíbrio #original thermo 100
+# -------------------------------
+thermo 1000
+thermo_style custom step temp etotal press
+timestep 0.001
+run 5000000    # etapa de estabilização
+reset_timestep 0
+
+# -------------------------------
+# Cálculos MSD e VACF + dump (original avetime 100 1 100, dump custom 500)
+# -------------------------------
+compute mymsd all msd
+compute myvacf all vacf
+fix output_MSD all ave/time 10 1 10 c_mymsd[4] file msd_rho_${rho}_v_${v}.dat
+fix output_VACF all ave/time 100 1 100 c_myvacf[4] file vacf_rho_${rho}_v_${v}.dat
+
+dump 1 all custom 25000 dump_rho_${rho}_v_${v}.lammpstrj id type x y ix iy vx vy
+dump_modify 1 sort id
+
+# -------------------------------
+# Execução principal 
+# -------------------------------
+run 50000000
+
+# -------------------------------
+# Limpeza antes da próxima simulação
+# -------------------------------
+unfix output_MSD
+unfix output_VACF
+undump 1
+unfix brown
+unfix active
+unfix planar
+
+# -------------------------------
+# Avança velocidade
+# -------------------------------
+next v_iter
+jump SELF loop_v
+
+# -------------------------------
+# Avança densidade
+# -------------------------------
+next rho_list
+jump SELF loop_rho
+
+print "Simulação concluída"
+
